@@ -70,10 +70,23 @@ function App() {
 
         // Ajout sur IPFS
         const result = await ipfs.add(uint8Array);
-
         console.log("Résultat IPFS :", result);
 
         const imageCID = result.path;
+
+        // Copier dans MFS pour le voir dans l'interface IPFS
+        const mfsPath = `/images/${imageCID}`;
+        try {
+          // Créer le dossier /images s'il n'existe pas (ignore l'erreur sinon)
+          await ipfs.files.mkdir("/images", { parents: true });
+        } catch (err) {
+          // dossier existe peut-être déjà, on ignore l'erreur
+        }
+        // Copier le fichier dans MFS
+        await ipfs.files.cp(`/ipfs/${imageCID}`, mfsPath);
+
+        console.log(`Fichier copié dans MFS à : ${mfsPath}`);
+
         const contract = await getContract();
         const tx = await contract.addCandidate(newCandidate.trim(), imageCID);
         await tx.wait();
