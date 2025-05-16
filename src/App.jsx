@@ -1,71 +1,139 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ethers } from "ethers";
-import Voting from ".Voting.json";
+import VotingAbi from "./Voting.json";
+import { create } from "ipfs-http-client";
+import { Buffer } from "buffer";
 
-const contractAddress = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+const ipfs = create({ url: "http://localhost:5001" });
 
-export default function App() {
+const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+
+function App() {
+  const [account, setAccount] = useState("");
+  const [isOwner, setIsOwner] = useState(false);
   const [candidates, setCandidates] = useState([]);
+  const [voteId, setVoteId] = useState(0);
   const [newCandidate, setNewCandidate] = useState("");
-  const [voteIndex, setVoteIndex] = useState("");
-  const [provider, setProvider] = useState(null);
-  const [signer, setSigner] = useState(null);
-  const [contract, setContract] = useState(null);
+  const [imageFile, setImageFile] = useState(null);
 
-  useEffect(() => {
-    const init = async () => {
-      if (typeof window.ethereum !== "undefined") {
-        try {
-          await window.ethereum.request({ method: "eth_requestAccounts" });
-
-          const provider = new ethers.providers.Web3Provider(window.ethereum);
-          const signer = provider.getSigner();
-          const contractAddress = new ethers.Contract(
-            contractAddress,
-            Voting.abi,
-            signer
-          );
-
-          setProvider(provider);
-          setSigner(signer);
-          setContract(contract);
-
-          loadCandidates(contract);
-        } catch (error) {
-          console.error("Error connecting to MetaMask:", error);
-        }
-      } else {
-        console.error("MetaMask is not installed");
-      }
-    };
-    init();
-  }, []);
-
-  const loadCandidates = async (contract) => {
-    const candidatesCount = await contract.candidatesCount();
-    let condidatesArray = [];
-    for (let i = 0; i < candidatesCount; i++) {
-      let candidate = await contract.candidates(i);
-      candidatesArray.push(candidate);
-    }
-    setCandidates(candidatesArray);
+  const getContract = async () => {
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    return new ethers.Contract(CONTRACT_ADDRESS, VotingAbi.abi, signer);
   };
 
-  const addCandidate = async () => {
-    if (!newCandidate) return;
-    const tx = await contract.addCandidate(newCandidate);
-    await tx.wait();
-    loadCandidates(contract);
-    setNewCandidate("");
+  const connectWallet = async () => {
+    if (!window.ethereum) return alert("Veuillez installer MetaMask");
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    const address = await signer.getAddress();
+    console.log("Adresse récupérée :", address);
+    setAccount(address);
+    const contract = await getContract();
+    const owner = await contract.owner();
+    setIsOwner(address.toLowerCase() === owner.toLowerCase());
+  };
+
+  const loadCandidates = async () => {
+    const contract = await getContract();
+    const count = await contract.candidatesCount();
+    const list = [];
+    for (let i = 0; i < count; i++) {
+      const c = await contract.candidates(i);
+      list.push({
+        id: i,
+        name: c.name,
+        voteCount: c.voteCount.toString(),
+        imageCID: c.imageCID,
+      });
+    }
+    setCandidates(list);
   };
 
   const vote = async () => {
-    if (voteIndex === "") return;
-    const tx = await contract.vote(voteIndex);
+    const contract = await getContract();
+    const tx = await contract.vote(voteId);
     await tx.wait();
-    loadCandidates(contract);
-    setVoteIndex("");
+    loadCandidates();
   };
 
-  return <div>App</div>;
+  const addCandidate = async () => {
+    if (!newCandidate.trim() || !imageFile) return;
+
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        if (!reader.result) throw new Error("Erreur lecture fichier");
+
+        // Convertir ArrayBuffer en Uint8Array
+        const uint8Array = new Uint8Array(reader.result);
+
+        // Ajout sur IPFS
+        const result = await ipfs.add(uint8Array);
+
+        console.log("Résultat IPFS :", result);
+
+        const imageCID = result.path;
+        const contract = await getContract();
+        const tx = await contract.addCandidate(newCandidate.trim(), imageCID);
+        await tx.wait();
+
+        setNewCandidate("");
+        setImageFile(null);
+        loadCandidates();
+      } catch (err) {
+        console.error("Erreur addCandidate:", err);
+      }
+    };
+    reader.readAsArrayBuffer(imageFile);
+  };
+
+  useEffect(() => {
+    connectWallet();
+    loadCandidates();
+  }, []);
+
+  return (
+    <div className="App" style={{ padding: "20px", fontFamily: "Arial" }}>
+      <h1>DApp de Vote</h1>
+      <p>
+        Connecté en tant que : <strong>{account}</strong>
+      </p>
+      {isOwner && (
+        <div style={{ marginBottom: "20px" }}>
+          <h3>Ajouter un candidat</h3>
+          <input
+            type="text"
+            value={newCandidate}
+            onChange={(e) => setNewCandidate(e.target.value)}
+            placeholder="Nom du candidat"
+          />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => setImageFile(e.target.files[0])}
+          />
+          <button onClick={addCandidate}>Ajouter</button>
+        </div>
+      )}
+      <ul>
+        {candidates.map((c) => (
+          <li key={c.id}>
+            {c.name} : {c.voteCount} vote(s)
+            <br />
+            {c.imageCID && (
+              <img
+                src={`http://127.0.0.1:8080/ipfs/${c.imageCID}`}
+                alt={c.name}
+                width="100"
+                style={{ marginTop: "10px" }}
+              />
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
+
+export default App;
